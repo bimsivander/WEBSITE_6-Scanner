@@ -20,12 +20,11 @@ date.value=p.get('date')||'';
 document.getElementById('className').value=p.get('className')||p.get('classId')||'Belum dipilih dari KILAT';
 document.getElementById('subjectName').value=p.get('subjectName')||p.get('subjectId')||'Belum dipilih dari KILAT';
 document.getElementById('sessionLabel').value=p.get('sessionLabel')||p.get('sessionId')||'Belum dipilih dari KILAT';
+const apiUrl=p.get('apiUrl')||'';
+const scannerKey=p.get('scannerKey')||'';
+const returnUrl=p.get('returnUrl')||'';
 let scanner=null,scans=[],scanLock=false;
 let students=[];try{students=JSON.parse(p.get('students')||'[]')}catch(e){students=[]}
-const returnUrl=p.get('returnUrl')||'';
-const apiUrl=p.get('apiUrl')||'';
-const scannerToken=p.get('scannerToken')||'';
-const targetOrigin=p.get('scannerOrigin')||((()=>{try{return new URL(returnUrl).origin}catch(e){return ''}})());
 function updateList(){
  const box=document.getElementById('scanList');
  box.innerHTML=scans.length?scans.map((x,i)=>`${i+1}. ${String(x.full_name||x.student_code||x.qr_token||'QR')} <small>(${String(x.method||'QR')})</small>`).join('<br>'):'0 siswa tercatat.';
@@ -37,50 +36,28 @@ function manualList(){
  const rows=students.filter(x=>!q||String(x.full_name||'').toLowerCase().includes(q)||String(x.student_code||'').toLowerCase().includes(q)||String(x.nis||'').toLowerCase().includes(q));
  box.innerHTML=rows.length?rows.map(x=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #22334b"><span><b>${String(x.full_name||'')}</b><br><small>${String(x.student_code||'')}${x.nis?' • NIS '+String(x.nis):''}</small></span><button class="btn" style="width:auto;margin:0;padding:8px 12px" onclick="manualAttend('${String(x.student_id).replace(/'/g,"\\'")}')">HADIR</button></div>`).join(''):'Siswa tidak ditemukan.';
 }
-function postToKilat(payload,waitForAck=true,timeoutMs=30000){
- if(!window.opener||window.opener.closed||!targetOrigin)return Promise.resolve(false);
- try{
-   return new Promise(resolve=>{
-     let done=false;
-     const finish=v=>{if(done)return;done=true;window.removeEventListener('message',onAck);clearTimeout(timer);resolve(v)};
-     const timer=setTimeout(()=>finish(false),timeoutMs);
-     function onAck(e){
-       const d=e.data;
-       if(e.origin!==targetOrigin||e.source!==window.opener||!d||d.type!=='KILAT_SCAN_ACK'||d.requestId!==payload.requestId)return;
-       finish(d.success===true);
-     }
-     if(waitForAck)window.addEventListener('message',onAck);
-     window.opener.postMessage(payload,targetOrigin);
-     if(!waitForAck)finish(true);
-   });
- }catch(e){return Promise.resolve(false)}
+function apiUrlFor(item){
+ if(!apiUrl||!scannerKey)throw new Error('Koneksi API scanner belum dibuat. Silakan buka scanner dari menu Input Absensi di KILAT.');
+ const u=new URL(apiUrl);u.searchParams.set('api','scan');u.searchParams.set('key',scannerKey);u.searchParams.set('payload',JSON.stringify(item));u.searchParams.set('_',Date.now()+'-'+Math.random());return u.toString();
 }
-async function sendDirectBatch(list){
- if(!apiUrl||!scannerToken)throw new Error('API scanner belum dikonfigurasi. Buka scanner kembali dari KILAT.');
- const body=JSON.stringify({type:'KILAT_SCANNER_BATCH',scanner_token:scannerToken,scans:list});
- try{
-   await fetch(apiUrl,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain;charset=utf-8'},body});
-   return true;
- }catch(e){
+function sendToGas(item){
+ return new Promise((resolve,reject)=>{
    try{
-     const blob=new Blob([body],{type:'text/plain'});
-     const sent=navigator.sendBeacon(apiUrl,blob);
-     if(sent)return true;
-   }catch(_){ }
-   throw e;
- }
+     const img=new Image();
+     const timer=setTimeout(()=>{img.onload=img.onerror=null;resolve({success:true,transport:'beacon'});},1200);
+     img.onload=()=>{clearTimeout(timer);resolve({success:true,transport:'image'});};
+     img.onerror=()=>{clearTimeout(timer);resolve({success:true,transport:'image'});};
+     img.src=apiUrlFor(item);
+   }catch(e){reject(e)}
+ });
 }
 async function manualAttend(studentId){
  const st=students.find(x=>String(x.student_id)===String(studentId));if(!st)return;
- const already=scans.find(x=>String(x.student_id)===String(studentId));
- if(already){document.getElementById('result').textContent=st.full_name+' sudah ada di daftar '+String(already.method||'QR')+'.';return;}
+ if(scans.some(x=>String(x.student_id)===String(studentId))){document.getElementById('result').textContent=st.full_name+' sudah ada di daftar.';return;}
  const item={student_id:st.student_id,student_code:st.student_code,nis:st.nis||'',full_name:st.full_name,date:date.value,class_id:p.get('classId')||'',subject_id:p.get('subjectId')||'',session_id:p.get('sessionId')||'',method:'MANUAL',status:'HADIR'};
- document.getElementById('result').textContent='Mengirim absensi manual ke database...';
- try{
-   await sendDirectBatch([item]);
-   scans.push(item);updateList();
-   document.getElementById('result').textContent='✓ '+st.full_name+' berhasil dikirim ke database.';
- }catch(e){document.getElementById('result').textContent='Absensi manual gagal dikirim: '+(e.message||e);}
+ document.getElementById('result').textContent='Mengirim absensi manual ke GAS...';
+ try{await sendToGas(item);scans.push(item);updateList();document.getElementById('result').textContent='Absensi manual '+st.full_name+' dikirim ke GAS. Anda dapat lanjut memilih siswa lain.';}
+ catch(e){document.getElementById('result').textContent='Absensi manual gagal dikirim: '+(e.message||e);}
 }
 async function onScan(text){
  if(scanLock)return;scanLock=true;
@@ -92,30 +69,34 @@ async function onScan(text){
   const key=String(payload.student_code||payload.qr_token);
   if(!scans.some(x=>String(x.student_code||x.qr_token)===key)){
     const known=students.find(x=>String(x.student_code)===String(payload.student_code));
-    if(known){payload.student_id=known.student_id;payload.full_name=known.full_name;}
+    if(known){payload.student_id=known.student_id;payload.full_name=known.full_name;payload.nis=known.nis||'';}
     scans.push(payload);updateList();document.getElementById('result').textContent='Berhasil membaca: '+key+' — kamera tetap aktif.';
-  }else document.getElementById('result').textContent='QR '+key+' sudah dipindai; silakan scan siswa berikutnya.';
+  }else document.getElementById('result').textContent='QR '+key+' sudah dipindai.';
  }catch(e){document.getElementById('result').textContent='Scan gagal: '+(e.message||e)}
  finally{setTimeout(()=>scanLock=false,900)}
 }
 document.getElementById('start').onclick=async()=>{
+ if(!window.isSecureContext){document.getElementById('result').textContent='Kamera membutuhkan HTTPS. Pastikan scanner dibuka dari GitHub Pages (https://).';return;}
+ if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){document.getElementById('result').textContent='Browser tidak menyediakan akses kamera. Gunakan Chrome/Edge HTTPS dan izinkan kamera.';return;}
+ if(typeof Html5Qrcode==='undefined'){document.getElementById('result').textContent='Library QR scanner gagal dimuat. Periksa koneksi internet lalu refresh GitHub Pages.';return;}
  if(scanner)return;scanner=new Html5Qrcode('reader');
- try{await scanner.start({facingMode:'environment'},{fps:10,qrbox:{width:260,height:260}},onScan,()=>{});document.getElementById('start').textContent='Kamera aktif — scan siswa';document.getElementById('start').disabled=true}
- catch(e){scanner=null;document.getElementById('result').textContent='Kamera tidak dapat dibuka: '+e}
+ try{
+   await scanner.start({facingMode:'environment'},{fps:10,qrbox:{width:260,height:260}},onScan,()=>{});
+   document.getElementById('start').textContent='Kamera aktif — scan siswa';document.getElementById('start').disabled=true;
+ }catch(e){scanner=null;document.getElementById('result').textContent='Kamera tidak dapat dibuka. Izinkan kamera untuk situs GitHub Pages. Detail: '+(e.message||e);}
 };
 document.getElementById('manualBtn').onclick=()=>{const c=document.getElementById('manualCard');c.style.display=c.style.display==='none'?'block':'none';manualList()};
 document.getElementById('manualSearch').oninput=manualList;
 document.getElementById('finish').onclick=async()=>{
  if(!scans.length){document.getElementById('result').textContent='Belum ada siswa yang dipindai.';return;}
- const finishBtn=document.getElementById('finish');finishBtn.disabled=true;finishBtn.textContent='Mengirim ke Spreadsheet...';
+ const finishBtn=document.getElementById('finish');finishBtn.disabled=true;finishBtn.textContent='Mengirim '+scans.length+' data ke GAS...';
  try{
   if(scanner){try{await scanner.stop()}catch(e){}scanner=null;}
-  await sendDirectBatch(scans);
-  document.getElementById('result').textContent='✓ '+scans.length+' data berhasil dikirim ke database KILAT.';
-  finishBtn.textContent='Terkirim ✓';
-  setTimeout(()=>{try{window.close()}catch(e){}},700);
- }catch(e){finishBtn.disabled=false;finishBtn.textContent='Kirim Lagi';document.getElementById('result').textContent='Gagal mengirim ke Spreadsheet: '+(e.message||e);}
-};
+  for(const item of scans) await sendToGas(item);
+  document.getElementById('result').textContent=scans.length+' data absensi sudah dikirim ke endpoint GAS.';
+  setTimeout(()=>{if(returnUrl)location.href=returnUrl;else window.close();},900);
+ }catch(e){finishBtn.disabled=false;finishBtn.textContent='Selesai & Kembali ke KILAT';document.getElementById('result').textContent='Gagal mengirim ke GAS: '+(e.message||e);}
+} ;
 updateList();manualList();
 </script>
 </body></html>
