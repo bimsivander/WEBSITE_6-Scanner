@@ -27,9 +27,37 @@ const date=document.getElementById('date');date.value=p.get('date')||'';
 document.getElementById('className').value=p.get('className')||p.get('classId')||'Belum dipilih dari KILAT';
 document.getElementById('subjectName').value=p.get('subjectName')||p.get('subjectId')||'Belum dipilih dari KILAT';
 document.getElementById('sessionLabel').value=p.get('sessionLabel')||p.get('sessionId')||'Belum dipilih dari KILAT';
-const apiUrl=p.get('apiUrl')||'',scannerKey=p.get('scannerKey')||'',returnUrl=p.get('returnUrl')||'';
+let apiUrl=p.get('apiUrl')||'',scannerKey=p.get('scannerKey')||'',returnUrl=p.get('returnUrl')||'';
+let bridgeReady=!!(apiUrl&&scannerKey);
 let scanner=null,scans=[],scanLock=false,manualSending=false;
 let students=[];try{students=JSON.parse(p.get('students')||'[]')}catch(e){students=[]}
+function applyKilatBridge(data){
+ if(!data||data.type!=='KILAT_SCANNER_INIT')return false;
+ if(data.apiUrl)apiUrl=String(data.apiUrl);
+ if(data.scannerKey)scannerKey=String(data.scannerKey);
+ if(data.returnUrl)returnUrl=String(data.returnUrl);
+ if(data.date){date.value=String(data.date);}
+ if(data.className)document.getElementById('className').value=String(data.className);
+ if(data.subjectName)document.getElementById('subjectName').value=String(data.subjectName);
+ if(data.sessionLabel)document.getElementById('sessionLabel').value=String(data.sessionLabel);
+ if(Array.isArray(data.students)&&data.students.length)students=data.students;
+ bridgeReady=!!(apiUrl&&scannerKey);
+ manualList();
+ updateList();
+ if(bridgeReady)document.getElementById('result').textContent='✓ Koneksi KILAT → GAS siap. Scanner siap digunakan.';
+ return bridgeReady;
+}
+window.addEventListener('message',function(ev){
+ if(!ev.data||ev.data.type!=='KILAT_SCANNER_INIT')return;
+ applyKilatBridge(ev.data);
+ try{ev.source&&ev.source.postMessage({type:'KILAT_SCANNER_ACK',ready:bridgeReady},ev.origin||'*')}catch(e){}
+});
+function announceReady(){
+ try{if(window.opener)window.opener.postMessage({type:'KILAT_SCANNER_READY',ready:bridgeReady},'*')}catch(e){}
+}
+setTimeout(announceReady,100);
+setTimeout(announceReady,700);
+setTimeout(announceReady,1500);
 const esc=v=>String(v??'').replace(/[&<>'"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[m]));
 const statusLabel={HADIR:'HADIR',SAKIT:'SAKIT',ALPA:'ALFA',IZIN:'IZIN'};
 function getQrStudent(id){return scans.find(x=>x.method==='QR'&&String(x.student_id)===String(id))||null}
@@ -59,7 +87,7 @@ function selectManual(studentId,status){
  const item={student_id:st.student_id,student_code:st.student_code,nis:st.nis||'',full_name:st.full_name,date:date.value,class_id:p.get('classId')||'',subject_id:p.get('subjectId')||'',session_id:p.get('sessionId')||'',method:'MANUAL',status};
  if(idx>=0)scans[idx]=item;else scans.push(item);manualList();updateList();document.getElementById('result').textContent=allManualSelected()?'Semua siswa sudah memiliki status. Tombol Kirim Absen siap digunakan.':st.full_name+' → '+(statusLabel[status]||status)+' tersimpan sementara di scanner.';
 }
-function apiUrlFor(item){if(!apiUrl||!scannerKey)throw new Error('Koneksi API scanner belum dibuat. Silakan buka scanner dari menu Input Absensi di KILAT.');const u=new URL(apiUrl);u.searchParams.set('api','scan');u.searchParams.set('key',scannerKey);u.searchParams.set('payload',JSON.stringify(item));u.searchParams.set('_',Date.now()+'-'+Math.random());return u.toString()}
+function apiUrlFor(item){if(!apiUrl||!scannerKey)throw new Error('Koneksi API scanner belum dibuat. Pastikan scanner dibuka dari tombol Scan QR di menu Input Absensi KILAT.');const u=new URL(apiUrl);u.searchParams.set('api','scan');u.searchParams.set('key',scannerKey);u.searchParams.set('payload',JSON.stringify(item));u.searchParams.set('_',Date.now()+'-'+Math.random());return u.toString()}
 function sendToGas(item){return new Promise((resolve,reject)=>{try{const img=new Image();const timer=setTimeout(()=>{img.onload=img.onerror=null;resolve({success:true,transport:'beacon'})},1200);img.onload=()=>{clearTimeout(timer);resolve({success:true,transport:'image'})};img.onerror=()=>{clearTimeout(timer);resolve({success:true,transport:'image'})};img.src=apiUrlFor(item)}catch(e){reject(e)}})}
 async function sendManualAbsensi(){
  if(manualSending||!students.length)return;
